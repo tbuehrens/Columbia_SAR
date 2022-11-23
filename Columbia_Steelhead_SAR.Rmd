@@ -1,0 +1,297 @@
+---
+title: "Columbia River Steelhead SAR estimates and forecasts"
+author: "Thomas Buehrens"
+output:
+  html_document:
+    code_folding: hide
+    fig_caption: yes
+    theme: cerulean
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+***
+
+Page Last Updated: `r format(Sys.time(), '%m/%d/%Y')`.
+
+***
+
+# Overview
+This code uses summer steelhead PIT tag counts and adult counts from Bonneville Dam to estimate:
+
+1) smolt to adult survival (measured from Bonneville Dam, out to sea, and back to Bonneville Dam)
+2) adult ocean age composition (assuming 2 age classes)
+3) runsize at Bonneville Dam
+
+Different PIT tag datasets can be used to estimate smolt to adult survival and age composition (e.g., for Upper Columbia or Snake or Lower Columbia), each of which is then used to estimate overall runsize at Bonneville. Snake River data generally results in the most precise adult runsize estimates and forecasts at Bonneville because it is the greatest component of the total runsize and is therefore more predictive of the total abundance.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load Functions
+```{r load functions, results = "hide",echo = T, message = FALSE, warning = FALSE}
+wd_functions<-"functions"
+sapply(FUN = source, paste(wd_functions, list.files(wd_functions), sep="/"))
+```
+
+# Load Packages
+This section of code will load the packages we need to complete the analysis
+```{r load packages, results = "hide",echo = T, message = FALSE, warning = FALSE}
+packages<-c("tidyverse","plyr","dplyr","lubridate","RColorBrewer","reshape2","ggplot2","gridExtra","kableExtra","rstan","bayesplot")
+install_or_load_pack(packages)
+```
+
+# Read and organize data
+Here we will read in a .csv of PIT tag data generated from a query [**here**](http://www.cbr.washington.edu/dart/query/pit_sar_esu), and  we will directly call adult counts generated from a query [**here**](http://www.cbr.washington.edu/dart/query/adult_annual_sum). The date range for the adult query will be restricted to 5/15-12/31 to generate an approximate index of the summer-run portion of the count.
+```{r load data, results = "show",echo = T, message = FALSE, warning = FALSE }
+dat<- read_csv("data/Columbia_Steelhead_SAR_DART_11_1_2021.csv")%>%
+  dplyr::rename(rel=juvCount,`1`=ocean1Count,`2`=ocean2Count)%>%
+  #===================================================================
+  #comment out lines below here to run separate predictions by PIT tag group
+  #===================================================================
+  # group_by(year)%>%
+  # dplyr::summarise(rel=sum(rel),`1`=sum(`1`),`2`= sum(`2`))%>%
+  # mutate(Pop="SNA_UCR")%>%
+
+  filter(Pop=="SNA")%>%
+  #===================================================================
+  mutate(rel=as.integer(rel),`99`=as.integer(rel-`1`-`2`),pop_stan=as.integer(factor(Pop)),year_stan=as.integer(year-min(year)+1))%>%
+  pivot_longer(cols=c(`1`,`2`,`99`),values_to = "det",names_to = "age_stan")%>%
+  mutate(age_stan=as.integer(age_stan))%>%
+  filter(!is.na(det))
+
+dat2<-read_csv("http://www.cbr.washington.edu/dart/cs/php/rpt/adult_annual.php?sc=1&outputFormat=csv&proj=BON&startdate=5%2F15&enddate=12%2F31")%>%
+  filter(Year>min(dat$year+1))%>%
+  dplyr::select(Year,Steelhead)
+
+
+dat3<-read_table("http://www.o3d.org/npgo/npgo.php",skip=29,col_names=F,comment="#")%>%
+  filter(!is.na(X2))%>%
+  dplyr::rename(year=X1,Month=X2,NPGO=X3)%>%
+  mutate(year=as.numeric(year))%>%
+  group_by(year)%>%
+  add_tally()%>%
+  filter(!Month>6)%>% #use only spring (Jan-June) NPGO
+  #filter(!n < 12)%>% #use only complete years
+  group_by(year)%>%
+  dplyr::summarise(mean_NPGO=mean(NPGO))
+
+stan_dat<-dat%>%
+  dplyr::select(obs_pop=pop_stan,
+                obs_yr=year_stan,
+                obs_age=age_stan,
+                rel=rel,
+                det=det
+                )%>%
+  as.list()%>%
+  mutate(data_yrs=length(unique(obs_yr)),
+         pops=length(unique(obs_pop)),
+         obs=length(rel),
+         forecast_yrs=1,
+         ry_adults_obs = matrix(rep(dat2$Steelhead,pops),ncol=length(unique(dat$Pop)))
+         )
+
+stan_dat$NPGO = dat3%>%
+  filter(year>=min(dat$year) & year <= max(dat$year+stan_dat$forecast_yrs))%>%
+  dplyr::select(mean_NPGO)%>%
+  unlist()
+
+
+dat%>%
+  dplyr::select(year,Pop,rel,det,age_stan)%>%
+  dplyr::rename(`Smolt detections @ BON` = rel, `Adult detections @ BON` = det, age = age_stan, Population = Pop, `Outmigration Year` = year )%>%
+  mutate(age = ifelse(age == 99,"Not Detected As Adult",paste0("Ocean Age ",age," detections @ BON")))%>%
+  filter(age!="Not Detected As Adult")%>%
+  pivot_wider(id_cols=c(`Outmigration Year`, Population, `Smolt detections @ BON`), names_from=age, values_from=`Adult detections @ BON`)%>%
+  kbl(caption = "Table 1. Raw PIT Tag Data",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+
+dat2%>%
+  kbl(caption = "Table 2. Summer Steelhead Bonneville Dam Counts. See query for date filters.",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# Stan Model 
+This section shows the Stan model code for estimating SAR, age composition, and run-size using PIT tag data, dam adult counts, and environmental covariates (e.g., NPGO).
+```{r }
+processFile("models/Columbia_SAR_v2.stan")
+```
+
+
+# Fit model to PIT tag data
+This section of code fits the data to the statistical model using Stan software: [**(link)**](https://mc-stan.org/).
+```{r fitstan, results = "hide",echo = T, message = FALSE, warning = FALSE}
+if(!file.exists("results/fit.RDS")){
+model<-stan_model("models/Columbia_SAR_v2.stan")
+fit<-sampling(model,
+              data=stan_dat,
+              cores=4,
+              chains=4,
+              iter=2000,
+              warmup=1000
+              ,control=list(adapt_delta=0.999,max_treedepth=12)
+              )
+write.csv(summary(fit)$summary,"results/summary.csv")
+saveRDS(fit,"results/fit.RDS")
+}else{
+  fit<-readRDS("results/fit.RDS")
+}
+
+sampler_params <- get_sampler_params(fit, inc_warmup = FALSE)
+divergences <- sapply(sampler_params, function(x) sum(x[, "divergent__"]))
+print(paste0("Number of divergent transitions: ",sum(divergences)))
+
+# posterior_cp <- as.array(fit)
+# mcmc_pairs(posterior_cp, np = np_cp, pars = c("sigma_disp","sigma_SAR","sigma_smolts"),
+#            off_diag_args = list(size = 0.75))
+```
+
+# SAR Results by outmigration year
+```{r plots outmigration, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+dim<-ifelse(stan_dat$pops>1,3,2)
+results<-melt(apply(extract(fit)$SAR,c(2:max(3,dim)),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Year=Var2,Population=Var3)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"),Year=Year+min(dat$year)-1)%>%
+  pivot_wider(id_cols = c("Year","Population"),names_from = Q,values_from = value)
+
+p<-ggplot(results,aes(x=Year,y=`50%`,fill=Population,color=Population))+
+  geom_ribbon(mapping=aes(ymin=`2.5%`,ymax=`97.5%`),alpha=0.25,color=NA)+
+  geom_ribbon(mapping=aes(ymin=`25%`,ymax=`75%`),alpha=0.25,color=NA)+
+  geom_line()+
+  ylab("H + W Steelhead SAR by outmigration year (Bonneville to Bonneville)")+
+  theme_bw()
+print(p)
+
+results%>%
+  kbl(caption = "Table 3. H + W Steelhead SAR by outmigration year (Bonneville to Bonneville)",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# Percent Ocean Age 1 Results by outmigration year
+```{r plots POA_1, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+
+results<-melt(apply(extract(fit)$p_OA1,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Year=Var2,Population=Var3)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"),Year=Year+min(dat$year)-1)%>%
+  pivot_wider(id_cols = c("Year","Population"),names_from = Q,values_from = value)
+
+p<-ggplot(results,aes(x=Year,y=`50%`,fill=Population,color=Population))+
+  geom_ribbon(mapping=aes(ymin=`2.5%`,ymax=`97.5%`),alpha=0.25,color=NA)+
+  geom_ribbon(mapping=aes(ymin=`25%`,ymax=`75%`),alpha=0.25,color=NA)+
+  geom_line()+
+  ylab("H + W Steelhead percent Ocean Age 1 by outmigration year")+
+  theme_bw()
+print(p)
+
+results%>%
+  kbl(caption = "Table 4. H + W Steelhead Percent Ocean Age 1 by outmigration year",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# SAR Results by return year
+```{r plots return year, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+yrs<-stan_dat$data_yrs+stan_dat$forecast_yrs
+ry_dat<-extract(fit)$SAR[,2:yrs,]*extract(fit)$p_OA1[,2:yrs,] + extract(fit)$SAR[,1:(yrs-1),]*(1-extract(fit)$p_OA1[,1:(yrs-1),])
+
+ry_dat<-melt(apply(ry_dat,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Year=Var2,Population=Var3)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"),Year=Year+min(dat$year)+1)%>%
+  pivot_wider(id_cols = c("Year","Population"),names_from = Q,values_from = value)
+
+p<-ggplot(ry_dat,aes(x=Year,y=`50%`,fill=Population,color=Population))+
+  geom_ribbon(mapping=aes(ymin=`2.5%`,ymax=`97.5%`),alpha=0.25,color=NA)+
+  geom_ribbon(mapping=aes(ymin=`25%`,ymax=`75%`),alpha=0.25,color=NA)+
+  geom_line()+
+  ylab("H + W Steelhead SAR by return year (Bonneville to Bonneville)")+
+  theme_bw()
+print(p)
+
+ry_dat%>%
+  kbl(caption = "Table 5. H + W Steelhead SAR by return year (Bonneville to Bonneville)",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# SAR to adult ratio
+This section shows estimates of the ratio of adult abundance to SAR. If using SAR and adult data from the same population, this is a direct estimate of smolt abundnace. If using SAR from one population to estimate adult abundance of another, this is a "surrogate of smolt abundance" but may be biased r
+```{r plots smolts, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+
+results<-melt(apply(extract(fit)$smolts,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Year=Var2,Population=Var3)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"),Year=Year+min(dat$year)-1)%>%
+  pivot_wider(id_cols = c("Year","Population"),names_from = Q,values_from = value)
+
+p<-ggplot(results,aes(x=Year,y=`50%`,fill=Population,color=Population))+
+  geom_ribbon(mapping=aes(ymin=`2.5%`,ymax=`97.5%`),alpha=0.25,color=NA)+
+  geom_ribbon(mapping=aes(ymin=`25%`,ymax=`75%`),alpha=0.25,color=NA)+
+  geom_line()+
+  ylab("H + W smolts abundance by outmigration year at Bonneville")+
+  theme_bw()
+print(p)
+
+results%>%
+  kbl(caption = "Table 6. H + W Steelhead smolt abundance at BON by outmigration year ",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# Adult Abundance by Return Year
+```{r plots adults, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+
+results<-melt(apply(extract(fit)$ry_adults_pred,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Year=Var2,Population=Var3)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"),Year=Year+min(dat$year)+1)%>%
+  pivot_wider(id_cols = c("Year","Population"),names_from = Q,values_from = value)%>%
+  left_join(dat2)
+
+p<-ggplot(results,aes(x=Year,y=`50%`,fill=Population,color=Population))+
+  geom_ribbon(mapping=aes(ymin=`2.5%`,ymax=`97.5%`),alpha=0.25,color=NA)+
+  geom_ribbon(mapping=aes(ymin=`25%`,ymax=`75%`),alpha=0.25,color=NA)+
+  geom_line()+
+  geom_point(mapping = aes(x=Year,y=Steelhead),color="black")+
+  ylab("H + W steelhead adult abundance at Bonneville by return year")+
+  theme_bw()
+print(p)
+
+results%>%
+  kbl(caption = "Table 7. H + W Steelhead adult abundance at Bonneville by return year",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+# Proportion of Ocean Age 1 Adults by Return Year
+```{r plots return year pOA1, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+results<-melt(apply(extract(fit)$ry_p_OA1,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Year=Var2,Population=Var3)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"),Year=Year+min(dat$year)+1)%>%
+  pivot_wider(id_cols = c("Year","Population"),names_from = Q,values_from = value)
+
+p<-ggplot(results,aes(x=Year,y=`50%`,fill=Population,color=Population))+
+  geom_ribbon(mapping=aes(ymin=`2.5%`,ymax=`97.5%`),alpha=0.25,color=NA)+
+  geom_ribbon(mapping=aes(ymin=`25%`,ymax=`75%`),alpha=0.25,color=NA)+
+  geom_line()+
+  ylab("H + W steelhead proportion of ocean age 1 adults at Bonneville by return year")+
+  theme_bw()
+print(p)
+
+results%>%
+  kbl(caption = "Table 8. H + W Steelhead proportion of ocean age 1 adults at Bonneville by return year",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+

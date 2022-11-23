@@ -1,0 +1,304 @@
+---
+title: Columbia River (Snake) Summer Steelhead SAR Models & Forecasts
+author: Thomas Buehrens (tbuehrens@dfw.wa.gov)
+output:
+  html_document:
+    code_folding: hide
+    fig_caption: yes
+    theme: cerulean
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+<script>
+   $(document).ready(function() {
+     $head = $('#header');
+     $head.prepend('<img src=\"https://privatelands.wdfw.wa.gov/wdfwlogo_clrnotxt.png"\" style=\"float: right;width: 150px;\"/>')
+   });
+</script>
+
+***
+
+Last Updated `r format(Sys.time(), '%m/%d/%Y')`.
+
+***
+
+
+# Setup
+All analyses require R software [**(link)**](https://cran.r-project.org/) (v3.4.3) for data retrieval, data processing, and summarizing model results. Here we configure R to perform our analysis and generate our outputs
+```{r set_options, echo = TRUE, message = FALSE}
+options(width = 100)
+knitr::opts_chunk$set(message = FALSE)
+set.seed(123)
+```
+
+We also need a couple of helper functions which we will load from the functions folder, which we will load using the walk() function from the purrr package (which we will install if it is not already installed).
+```{r load_funcs, message = FALSE, warning = FALSE,results = "hide"}
+wd_functions<-"functions"
+sapply(FUN = source, paste(wd_functions, list.files(wd_functions), sep="/"))
+
+logit<-function(x){log(x/(1-x))}
+ilogit<-function(x){exp(x)/(1+exp(x))}
+```
+
+Here we will load & install packages we need to use (needs internet connection if packages not already installed)
+```{r load_packages, message = FALSE, warning = FALSE,results = "hide"}
+packages_list<-c("tidyverse"
+                 ,"forecast"
+                 ,"mgcv"
+                 ,"ggplot2"
+                 ,"kableExtra"
+                 ,"brms"
+                 ,"modelr"
+                 ,"gamm4"
+                 ,"gridExtra"
+                 ,"rvest"
+                 ,"janitor"
+                 )
+install_or_load_pack(pack = packages_list)
+```
+
+# Load Data
+```{r load_data, message = FALSE, warning = FALSE,results = "show"}
+NPGO<-read_table("http://www.o3d.org/npgo/npgo.php",skip=29,col_names=F,comment="#")%>%
+  filter(!is.na(X2))%>%
+  dplyr::rename(year=X1,Month=X2,NPGO=X3)%>%
+  mutate(year=as.numeric(year))%>%
+  group_by(year)%>%
+  add_tally()%>%
+  group_by(year)%>%
+  dplyr::summarise(NPGO=mean(NPGO))
+
+SAR_data<-read_html("https://www.cbr.washington.edu/dart/wrapper?type=php&fname=pitsaresu_1669129113_863.csv")%>%
+  html_nodes("body")%>%
+  html_text()%>%
+  read_lines(skip_empty_rows = T)%>%
+  tibble()%>%
+  setNames("lines")%>%
+  filter(grepl("year",lines) | grepl("20",lines) & !grepl("Generated",lines) & !grepl("DART Data Citation",lines))%>%
+  as_vector()%>%
+  str_split(",")%>%
+  as.data.frame()%>%
+  as.matrix()%>%
+  t()%>%
+  as_tibble()%>%
+  row_to_names(row_number = 1)%>%
+  type.convert()
+
+ 
+dat<-SAR_data%>%
+  dplyr::select(year,juvCount,ocean1Count,ocean2Count)%>%
+  full_join(NPGO)%>%
+  arrange(year)%>%
+  mutate(even_odd=year%%2,
+         juvCount = ifelse(!is.na(juvCount),juvCount,0),
+         lag1_NPGO = lag(NPGO),
+         lag2_NPGO = lag(NPGO,2),
+         diff_NPGO_L2L1 = c(NA,diff(lag1_NPGO-lag2_NPGO)),
+         logit_p1 = logit(ocean1Count/juvCount),
+         logit_p2 = ifelse(ocean2Count>1,logit(ocean2Count/juvCount),NA),
+         oceanALLCount = ocean1Count + ocean2Count,
+         logit_pALL = ifelse(ocean2Count>1,logit(oceanALLCount/juvCount),NA),
+         )
+```
+
+# Ocean age 1 Forecast
+```{r OA1_forecasts, message = FALSE, warning = FALSE, results = "asis", include=TRUE}
+m1<-gam(cbind(ocean1Count,juvCount-ocean1Count) ~ s(year,bs="bs",m=1) + even_odd + lag1_NPGO,data=dat%>%filter(juvCount>=1),family="binomial")
+summary(m1)
+plot(m1)
+AIC(m1)
+
+m2<-gamm(cbind(ocean1Count,juvCount-ocean1Count) ~  s(year,bs="bs",m=1) + even_odd + lag1_NPGO, correlation=corARMA(q=1),data=dat%>%filter(juvCount>=1),family="binomial")
+summary(m2$lme)
+preds2<-tibble(preds2=predict(m2$gam,newdata=dat%>%filter(juvCount>=1),type = "response"))
+AIC(m2$lme)
+plot(m2$gam)
+
+m3<-auto.arima(y=dat%>%filter(juvCount>=1)%>%dplyr::select(logit_p1)%>%pull(),
+               xreg=dat%>%filter(juvCount>=1)%>%dplyr::select(even_odd,lag1_NPGO)%>%as.matrix()
+)
+f<-forecast(m3,h=1,xreg=dat%>%filter(juvCount>=1)%>%dplyr::select(even_odd,lag1_NPGO)%>%as.matrix())
+f<-ilogit(c(f$fitted[!is.na(f$fitted)],f$mean[is.na(f$fitted)]))
+
+newdat<-dat%>%
+  filter(juvCount>=1)%>%
+  add_predictions(m1,type="response")%>%
+  bind_cols(preds2)%>%
+  bind_cols(tibble(preds3=f))
+  
+
+p1<-ggplot(newdat,aes(x=year,y=pred))+
+  geom_line()+
+  geom_line(mapping=aes(x=year,y=preds2),color="red")+
+  geom_line(mapping=aes(x=year,y=preds3),color="blue")+
+  geom_point(mapping=aes(x=year,y=ilogit(logit_p1)))+
+  ylim(0,NA)
+
+
+m4<-brm(ocean1Count|trials(juvCount) ~  gp(year) + even_odd + lag1_NPGO #s(year,bs="bs",m=1)
+        ,data=dat%>%filter(juvCount>=1)
+        ,family="binomial"
+        #,prior=set_prior(horseshoe(1, scale_global = 0.5))
+        ,prior = set_prior(horseshoe(df = 1, par_ratio = 0.8), class="b")
+        ,chains = 4
+        ,cores = 4
+        ,iter = 2000
+        ,warmup = 1000
+        ,control=list(adapt_delta = 0.995)
+)
+
+preds4=predict(m4,newdata=dat%>%filter(juvCount>=1))%>%
+  as_vector()%>%
+  as_tibble()%>%
+  dplyr::select(Estimate,Q2.5,Q97.5)%>%
+  bind_cols(dat%>%
+              filter(juvCount>=1)%>%
+              dplyr::select(juvCount,year,logit_p1)
+  )%>%
+  mutate(across(c(Estimate,Q2.5,Q97.5),~./juvCount+1e-09,byrow=T))
+
+ggplot(preds4,aes(x=year,y=Estimate))+
+  geom_line()+
+  geom_ribbon(aes(ymin=`Q2.5`,ymax=`Q97.5`),fill="cadetblue",alpha=0.5,color=NA)+
+  geom_point(mapping=aes(x=year,y=ilogit(logit_p1)))+
+  ylim(0,NA)
+```
+
+# Ocean age 2 Forecast
+```{r OA2_forecasts, message = FALSE, warning = FALSE, results = "asis", include=TRUE}
+m1<-gam(cbind(ocean2Count,juvCount-ocean2Count) ~ s(year,bs="bs",m=1) + even_odd +  lag1_NPGO,data=dat%>%filter(juvCount>=1),family="binomial")
+summary(m1)
+plot(m1)
+AIC(m1)
+
+m2<-gamm(cbind(ocean2Count,juvCount-ocean2Count) ~  s(year,bs="bs",m=1) + even_odd +  lag1_NPGO, correlation=corARMA(q=1),data=dat%>%filter(juvCount>=1),family="binomial")
+summary(m2$lme)
+preds2<-tibble(preds2=predict(m2$gam,newdata=dat%>%filter(juvCount>=1),type = "response"))
+AIC(m2$lme)
+plot(m2$gam)
+
+
+m3<-auto.arima(y=dat%>%filter(juvCount>=1)%>%dplyr::select(logit_p2)%>%pull(),
+               xreg=dat%>%filter(juvCount>=1)%>%dplyr::select(even_odd, lag1_NPGO)%>%as.matrix()
+)
+f<-forecast(m3,h=1,xreg=dat%>%filter(juvCount>=1)%>%dplyr::select(even_odd,lag1_NPGO)%>%as.matrix())
+f<-ilogit(c(f$fitted[!is.na(f$fitted)],f$mean[is.na(f$fitted)]))
+
+newdat<-dat%>%
+  filter(juvCount>=1)%>%
+  add_predictions(m1,type="response")%>%
+  bind_cols(preds2)%>%
+  bind_cols(tibble(preds3=f))
+
+
+p2<-ggplot(newdat,aes(x=year,y=pred))+
+  geom_line()+
+  geom_line(mapping=aes(x=year,y=preds2),color="red")+
+  geom_line(mapping=aes(x=year,y=preds3),color="blue")+
+  geom_point(mapping=aes(x=year,y=ilogit(logit_p2)))+
+  ylim(0,NA)+
+  xlim(NA,2022)
+
+
+m4<-brm(ocean2Count|trials(juvCount) ~  gp(year) + even_odd + lag1_NPGO + lag2_NPGO + diff_NPGO_L2L1 #s(year,bs="bs",m=1)
+        ,data=dat%>%filter(juvCount>=1)
+        ,family="binomial"
+        #,prior=set_prior(horseshoe(1, scale_global = 0.5))
+        ,prior = set_prior(horseshoe(df = 1, par_ratio = 0.8), class="b")
+        ,chains = 4
+        ,cores = 4
+        ,iter = 2000
+        ,warmup = 1000
+        ,control=list(adapt_delta = 0.995)
+        )
+
+preds4=predict(m4,newdata=dat%>%filter(juvCount>=1))%>%
+  as_vector()%>%
+  as_tibble()%>%
+  dplyr::select(Estimate,Q2.5,Q97.5)%>%
+  bind_cols(dat%>%
+              filter(juvCount>=1)%>%
+              dplyr::select(juvCount,year,logit_p2)
+            )%>%
+  mutate(across(c(Estimate,Q2.5,Q97.5),~./juvCount+1e-09,byrow=T))
+
+ggplot(preds4,aes(x=year,y=Estimate))+
+  geom_line()+
+  geom_ribbon(aes(ymin=`Q2.5`,ymax=`Q97.5`),fill="cadetblue",alpha=0.5,color=NA)+
+  geom_point(mapping=aes(x=year,y=ilogit(logit_p2)))+
+  ylim(0,NA)
+```
+
+# All Ocean age  Forecast
+```{r All_OA_forecasts, message = FALSE, warning = FALSE, results = "asis", include=TRUE}
+m1<-gam(cbind(oceanALLCount,juvCount-oceanALLCount) ~ s(year,bs="bs",m=1) + even_odd + lag1_NPGO + lag2_NPGO + diff_NPGO_L2L1,data=dat%>%filter(juvCount>=1),family="binomial")
+summary(m1)
+plot(m1)
+AIC(m1)
+
+m2<-gamm(cbind(oceanALLCount,juvCount-oceanALLCount) ~  s(year,bs="bs",m=1) + even_odd +  lag1_NPGO + lag2_NPGO + diff_NPGO_L2L1, correlation=corARMA(q=1),data=dat%>%filter(juvCount>=1),family="binomial")
+summary(m2$lme)
+preds2<-tibble(preds2=predict(m2$gam,newdata=dat%>%filter(juvCount>=1),type = "response"))
+AIC(m2$lme)
+plot(m2$gam)
+
+
+m3<-auto.arima(y=dat%>%filter(juvCount>=1)%>%dplyr::select(logit_pALL)%>%pull(),
+               xreg=dat%>%filter(juvCount>=1)%>%dplyr::select(even_odd, lag1_NPGO, lag2_NPGO, diff_NPGO_L2L1)%>%as.matrix()
+)
+f<-forecast(m3,h=1,xreg=dat%>%filter(juvCount>=1)%>%dplyr::select(even_odd,lag1_NPGO, lag2_NPGO, diff_NPGO_L2L1)%>%as.matrix())
+f<-ilogit(c(f$fitted[!is.na(f$fitted)],f$mean[is.na(f$fitted)]))
+
+newdat<-dat%>%
+  filter(juvCount>=1)%>%
+  add_predictions(m1,type="response")%>%
+  bind_cols(preds2)%>%
+  bind_cols(tibble(preds3=f))
+
+
+
+p3<-ggplot(newdat,aes(x=year,y=pred))+
+  geom_line()+
+  geom_line(mapping=aes(x=year,y=preds2),color="red")+
+  geom_line(mapping=aes(x=year,y=preds3),color="blue")+
+  geom_point(mapping=aes(x=year,y=ilogit(logit_pALL)))+
+  ylim(0,NA)+
+  xlim(NA,2022)
+
+print(p3)
+
+m4<-brm(oceanALLCount|trials(juvCount) ~  gp(year) + even_odd + lag1_NPGO + lag2_NPGO + diff_NPGO_L2L1 #s(year,bs="bs",m=1)
+        ,data=dat%>%filter(juvCount>=1)
+        ,family="binomial"
+        #,prior=set_prior(horseshoe(1, scale_global = 0.5))
+        ,prior = set_prior(horseshoe(df = 1, par_ratio = 0.8), class="b")
+        ,chains = 4
+        ,cores = 4
+        ,iter = 2000
+        ,warmup = 1000
+        ,control=list(adapt_delta = 0.995)
+)
+
+preds4=predict(m4,newdata=dat%>%filter(juvCount>=1))%>%
+  as_vector()%>%
+  as_tibble()%>%
+  dplyr::select(Estimate,Q2.5,Q97.5)%>%
+  bind_cols(dat%>%
+              filter(juvCount>=1)%>%
+              dplyr::select(juvCount,year,logit_pALL)
+  )%>%
+  mutate(across(c(Estimate,Q2.5,Q97.5),~./juvCount+1e-09,byrow=T))
+
+ggplot(preds4,aes(x=year,y=Estimate))+
+  geom_line()+
+  geom_ribbon(aes(ymin=`Q2.5`,ymax=`Q97.5`),fill="cadetblue",alpha=0.5,color=NA)+
+  geom_point(mapping=aes(x=year,y=ilogit(logit_pALL)))+
+  ylim(0,NA)
+```
+
+grid.arrange(p1,p2,p3,nrow=1)
