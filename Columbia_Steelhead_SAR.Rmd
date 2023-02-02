@@ -49,21 +49,35 @@ install_or_load_pack(packages)
 # Read and organize data
 Here we will read in a .csv of PIT tag data generated from a query [**here**](http://www.cbr.washington.edu/dart/query/pit_sar_esu), and  we will directly call adult counts generated from a query [**here**](http://www.cbr.washington.edu/dart/query/adult_annual_sum). The date range for the adult query will be restricted to 5/15-12/31 to generate an approximate index of the summer-run portion of the count.
 ```{r load data, results = "show",echo = T, message = FALSE, warning = FALSE }
-dat<- read_csv("data/Columbia_Steelhead_SAR_DART_11_1_2021.csv")%>%
+dat<-read_csv("https://www.cbr.washington.edu/dart/cs/php/rpt/pit_sar_esu.php?queryType=year&proj=BON&esu_type=SR_Sthd&rt=A&age=all&grouptype=basin&csvOnly=1")%>%
+  dplyr::select(year,juvCount,ocean1Count,ocean2Count)%>%
+  mutate(Pop="SNA")%>%
   dplyr::rename(rel=juvCount,`1`=ocean1Count,`2`=ocean2Count)%>%
-  #===================================================================
-  #comment out lines below here to run separate predictions by PIT tag group
-  #===================================================================
-  # group_by(year)%>%
-  # dplyr::summarise(rel=sum(rel),`1`=sum(`1`),`2`= sum(`2`))%>%
-  # mutate(Pop="SNA_UCR")%>%
-
-  filter(Pop=="SNA")%>%
-  #===================================================================
+  dplyr::filter(grepl("2",year))%>%
+  mutate(year=as.numeric(year))%>%
+  dplyr::filter(if(month(Sys.Date()) < 12) year < (year(Sys.Date())-1) else(year<year(Sys.Date())))%>%
+  mutate(`2` = ifelse(year==year(Sys.Date())-2 & month(Sys.Date()) < 12, NA,`2`))%>%
   mutate(rel=as.integer(rel),`99`=as.integer(rel-`1`-`2`),pop_stan=as.integer(factor(Pop)),year_stan=as.integer(year-min(year)+1))%>%
   pivot_longer(cols=c(`1`,`2`,`99`),values_to = "det",names_to = "age_stan")%>%
   mutate(age_stan=as.integer(age_stan))%>%
   filter(!is.na(det))
+
+
+# dat<- read_csv("data/Columbia_Steelhead_SAR_DART_11_1_2021.csv")%>%
+#   dplyr::rename(rel=juvCount,`1`=ocean1Count,`2`=ocean2Count)%>%
+#   #===================================================================
+#   #comment out lines below here to run separate predictions by PIT tag group
+#   #===================================================================
+#   # group_by(year)%>%
+#   # dplyr::summarise(rel=sum(rel),`1`=sum(`1`),`2`= sum(`2`))%>%
+#   # mutate(Pop="SNA_UCR")%>%
+# 
+#   filter(Pop=="SNA")%>%
+#   #===================================================================
+#   mutate(rel=as.integer(rel),`99`=as.integer(rel-`1`-`2`),pop_stan=as.integer(factor(Pop)),year_stan=as.integer(year-min(year)+1))%>%
+#   pivot_longer(cols=c(`1`,`2`,`99`),values_to = "det",names_to = "age_stan")%>%
+#   mutate(age_stan=as.integer(age_stan))%>%
+#   filter(!is.na(det))
 
 dat2<-read_csv("http://www.cbr.washington.edu/dart/cs/php/rpt/adult_annual.php?sc=1&outputFormat=csv&proj=BON&startdate=5%2F15&enddate=12%2F31")%>%
   filter(Year>min(dat$year+1))%>%
@@ -76,7 +90,7 @@ dat3<-read_table("http://www.o3d.org/npgo/npgo.php",skip=29,col_names=F,comment=
   mutate(year=as.numeric(year))%>%
   group_by(year)%>%
   add_tally()%>%
-  filter(!Month>6)%>% #use only spring (Jan-June) NPGO
+  #filter(!Month>6)%>% #use only spring (Jan-June) NPGO
   #filter(!n < 12)%>% #use only complete years
   group_by(year)%>%
   dplyr::summarise(mean_NPGO=mean(NPGO))
