@@ -79,7 +79,7 @@ dat<-read_csv("https://www.cbr.washington.edu/dart/cs/php/rpt/pit_sar_esu.php?qu
 #   mutate(age_stan=as.integer(age_stan))%>%
 #   filter(!is.na(det))
 
-dat2<-read_csv("http://www.cbr.washington.edu/dart/cs/php/rpt/adult_annual.php?sc=1&outputFormat=csv&proj=BON&startdate=5%2F15&enddate=12%2F31")%>%
+dat2<-read_csv("http://www.cbr.washington.edu/dart/cs/php/rpt/adult_annual.php?sc=1&outputFormat=csv&proj=BON&startdate=6%2F1&enddate=11%2F30")%>%
   filter(Year>min(dat$year+1))%>%
   dplyr::select(Year,Steelhead)
 
@@ -113,6 +113,12 @@ stan_dat<-dat%>%
 stan_dat$NPGO = dat3%>%
   filter(year>=min(dat$year) & year <= max(dat$year+stan_dat$forecast_yrs))%>%
   dplyr::select(mean_NPGO)%>%
+  unlist()
+
+stan_dat$X2 = dat3%>%
+  filter(year>=min(dat$year) & year <= max(dat$year+stan_dat$forecast_yrs))%>%
+  mutate(X2 = ifelse(year%%2==0,1,0))%>%
+  dplyr::select(X2)%>%
   unlist()
 
 

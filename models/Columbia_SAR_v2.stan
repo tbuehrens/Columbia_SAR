@@ -10,12 +10,14 @@ data{
   int rel[obs]; //number of adult PIT tags detected passing BON going upstream
   int ry_adults_obs[data_yrs-1,pops]; //Bonneville Dam adult count
   vector[data_yrs + forecast_yrs] NPGO; //NPGO for outmigration years and forecast years
+  vector[data_yrs + forecast_yrs] X2; //second covariate
 }
 transformed data{
   int yrs = data_yrs + forecast_yrs;
 }
 parameters{
   vector[pops] b1;
+  vector[pops] b2;
 
   vector<lower=0,upper=1>[pops] mu_SAR;
   vector<lower=-1,upper=1>[pops] phi_SAR;
@@ -64,7 +66,7 @@ transformed parameters{
     SAR_resid[1:yrs,p] = SAR_resid[1:yrs,p] - mean(SAR_resid[1:yrs,p]);//constrain SAR resids to have zero mean
     p_OA1_resid[1:yrs,p] = p_OA1_resid[1:yrs,p] - mean(p_OA1_resid[1:yrs,p]);//constrain p_OA1 resids to have zero mean
 
-    SAR[1:yrs,p] = inv_logit(logit(mu_SAR[p]) + b1[p] * NPGO[1:yrs] + SAR_resid[1:yrs,p]);
+    SAR[1:yrs,p] = inv_logit(logit(mu_SAR[p]) + b1[p] * NPGO[1:yrs] + b2[p] * X2[1:yrs] + SAR_resid[1:yrs,p]);
     p_OA1[1:yrs,p] = inv_logit(logit(mu_p_OA1[p]) + p_OA1_resid[1:yrs,p]);
   }
   
@@ -78,6 +80,7 @@ transformed parameters{
 model{
   //priors
   b1 ~ normal(0,10);
+  b2 ~ normal(0,10);
 
 
   mu_SAR ~ beta(1,1);
