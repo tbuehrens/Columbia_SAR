@@ -47,7 +47,7 @@ install_or_load_pack(packages)
 ```
 
 # Read and organize data
-Here we will read in a .csv of PIT tag data generated from a query [**here**](http://www.cbr.washington.edu/dart/query/pit_sar_esu), and  we will directly call adult counts generated from a query [**here**](http://www.cbr.washington.edu/dart/query/adult_annual_sum). The date range for the adult query will be restricted to 5/15-12/31 to generate an approximate index of the summer-run portion of the count.
+Here we will read in a .csv of PIT tag data generated from a query [**here**](http://www.cbr.washington.edu/dart/query/pit_sar_esu), and  we will directly call adult counts generated from a query [**here**](http://www.cbr.washington.edu/dart/query/adult_annual_sum). The date range for the adult query will be restricted to 6/1-11/30 (corresponding to TAC dates for upriver summer steelhead counts) to generate an approximate index of the summer-run portion of the count.
 ```{r load data, results = "show",echo = T, message = FALSE, warning = FALSE }
 dat<-read_csv("https://www.cbr.washington.edu/dart/cs/php/rpt/pit_sar_esu.php?queryType=year&proj=BON&esu_type=SR_Sthd&rt=A&age=all&grouptype=basin&csvOnly=1")%>%
   dplyr::select(year,juvCount,ocean1Count,ocean2Count)%>%
@@ -110,14 +110,16 @@ stan_dat<-dat%>%
          ry_adults_obs = matrix(rep(dat2$Steelhead,pops),ncol=length(unique(dat$Pop)))
          )
 
-stan_dat$NPGO = dat3%>%
+dat3<-dat3%>%
   filter(year>=min(dat$year) & year <= max(dat$year+stan_dat$forecast_yrs))%>%
+  dplyr::rename(Year=year)%>%
+  mutate(X2 = ifelse(Year%%2==0,1,0))
+
+stan_dat$NPGO<-dat3%>%
   dplyr::select(mean_NPGO)%>%
   unlist()
 
 stan_dat$X2 = dat3%>%
-  filter(year>=min(dat$year) & year <= max(dat$year+stan_dat$forecast_yrs))%>%
-  mutate(X2 = ifelse(year%%2==0,1,0))%>%
   dplyr::select(X2)%>%
   unlist()
 
@@ -133,7 +135,9 @@ dat%>%
 
 
 dat2%>%
-  kbl(caption = "Table 2. Summer Steelhead Bonneville Dam Counts. See query for date filters.",digits =3)%>%
+  right_join(dat3)%>%
+  arrange(Year)%>%
+  kbl(caption = "Table 2. Summer Steelhead Bonneville Dam Counts and covariate data. NPGO is annual calendar year mean NPGO. X2 is a pink salmon even odd year indicator variable. See query for date filters. Years with NA for Steelhead only covariate data are needed for the model",digits =3)%>%
   kable_classic(full_width = F, html_font = "Cambria")
 ```
 
