@@ -1865,7 +1865,8 @@ install_or_load_pack(packages)</code></pre>
 <h1>Read and organize data</h1>
 <p>Here we will read in a .csv of PIT tag data generated from a query <a href="http://www.cbr.washington.edu/dart/query/pit_sar_esu"><strong>here</strong></a>,
 and we will directly call adult counts generated from a query <a href="http://www.cbr.washington.edu/dart/query/adult_annual_sum"><strong>here</strong></a>.
-The date range for the adult query will be restricted to 5/15-12/31 to
+The date range for the adult query will be restricted to 6/1-11/30
+(corresponding to TAC dates for upriver summer steelhead counts) to
 generate an approximate index of the summer-run portion of the
 count.</p>
 <pre class="r"><code>dat&lt;-read_csv(&quot;https://www.cbr.washington.edu/dart/cs/php/rpt/pit_sar_esu.php?queryType=year&amp;proj=BON&amp;esu_type=SR_Sthd&amp;rt=A&amp;age=all&amp;grouptype=basin&amp;csvOnly=1&quot;)%&gt;%
@@ -1929,14 +1930,16 @@ stan_dat&lt;-dat%&gt;%
          ry_adults_obs = matrix(rep(dat2$Steelhead,pops),ncol=length(unique(dat$Pop)))
          )
 
-stan_dat$NPGO = dat3%&gt;%
+dat3&lt;-dat3%&gt;%
   filter(year&gt;=min(dat$year) &amp; year &lt;= max(dat$year+stan_dat$forecast_yrs))%&gt;%
+  dplyr::rename(Year=year)%&gt;%
+  mutate(X2 = ifelse(Year%%2==0,1,0))
+
+stan_dat$NPGO&lt;-dat3%&gt;%
   dplyr::select(mean_NPGO)%&gt;%
   unlist()
 
 stan_dat$X2 = dat3%&gt;%
-  filter(year&gt;=min(dat$year) &amp; year &lt;= max(dat$year+stan_dat$forecast_yrs))%&gt;%
-  mutate(X2 = ifelse(year%%2==0,1,0))%&gt;%
   dplyr::select(X2)%&gt;%
   unlist()
 
@@ -2316,12 +2319,16 @@ NA
 </tbody>
 </table>
 <pre class="r"><code>dat2%&gt;%
-  kbl(caption = &quot;Table 2. Summer Steelhead Bonneville Dam Counts. See query for date filters.&quot;,digits =3)%&gt;%
+  right_join(dat3)%&gt;%
+  arrange(Year)%&gt;%
+  kbl(caption = &quot;Table 2. Summer Steelhead Bonneville Dam Counts and covariate data. NPGO is annual calendar year mean NPGO. X2 is a pink salmon even odd year indicator variable. See query for date filters. Years with NA for Steelhead only covariate data are needed for the model&quot;,digits =3)%&gt;%
   kable_classic(full_width = F, html_font = &quot;Cambria&quot;)</code></pre>
 <table class=" lightable-classic" style="font-family: Cambria; width: auto !important; margin-left: auto; margin-right: auto;">
 <caption>
-Table 2. Summer Steelhead Bonneville Dam Counts. See query for date
-filters.
+Table 2. Summer Steelhead Bonneville Dam Counts and covariate data. NPGO
+is annual calendar year mean NPGO. X2 is a pink salmon even odd year
+indicator variable. See query for date filters. Years with NA for
+Steelhead only covariate data are needed for the model
 </caption>
 <thead>
 <tr>
@@ -2331,15 +2338,55 @@ Year
 <th style="text-align:right;">
 Steelhead
 </th>
+<th style="text-align:right;">
+mean_NPGO
+</th>
+<th style="text-align:right;">
+X2
+</th>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td style="text-align:right;">
+2002
+</td>
+<td style="text-align:right;">
+NA
+</td>
+<td style="text-align:right;">
+1.474
+</td>
+<td style="text-align:right;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:right;">
+2003
+</td>
+<td style="text-align:right;">
+NA
+</td>
+<td style="text-align:right;">
+0.959
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
 <tr>
 <td style="text-align:right;">
 2004
 </td>
 <td style="text-align:right;">
 305122
+</td>
+<td style="text-align:right;">
+0.209
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2349,6 +2396,12 @@ Steelhead
 <td style="text-align:right;">
 312483
 </td>
+<td style="text-align:right;">
+-1.383
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2356,6 +2409,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 332218
+</td>
+<td style="text-align:right;">
+-0.556
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2365,6 +2424,12 @@ Steelhead
 <td style="text-align:right;">
 319329
 </td>
+<td style="text-align:right;">
+0.594
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2372,6 +2437,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 353086
+</td>
+<td style="text-align:right;">
+1.456
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2381,6 +2452,12 @@ Steelhead
 <td style="text-align:right;">
 599297
 </td>
+<td style="text-align:right;">
+0.739
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2388,6 +2465,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 405780
+</td>
+<td style="text-align:right;">
+1.369
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2397,6 +2480,12 @@ Steelhead
 <td style="text-align:right;">
 363222
 </td>
+<td style="text-align:right;">
+0.859
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2404,6 +2493,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 228928
+</td>
+<td style="text-align:right;">
+1.478
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2413,6 +2508,12 @@ Steelhead
 <td style="text-align:right;">
 230393
 </td>
+<td style="text-align:right;">
+0.346
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2420,6 +2521,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 319511
+</td>
+<td style="text-align:right;">
+-0.250
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2429,6 +2536,12 @@ Steelhead
 <td style="text-align:right;">
 262249
 </td>
+<td style="text-align:right;">
+-1.395
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2436,6 +2549,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 182590
+</td>
+<td style="text-align:right;">
+-0.190
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2445,6 +2564,12 @@ Steelhead
 <td style="text-align:right;">
 114256
 </td>
+<td style="text-align:right;">
+-0.862
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2452,6 +2577,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 99041
+</td>
+<td style="text-align:right;">
+-1.907
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2461,6 +2592,12 @@ Steelhead
 <td style="text-align:right;">
 74978
 </td>
+<td style="text-align:right;">
+-2.251
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2468,6 +2605,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 110954
+</td>
+<td style="text-align:right;">
+-1.768
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 <tr>
@@ -2477,6 +2620,12 @@ Steelhead
 <td style="text-align:right;">
 70043
 </td>
+<td style="text-align:right;">
+-0.879
+</td>
+<td style="text-align:right;">
+0
+</td>
 </tr>
 <tr>
 <td style="text-align:right;">
@@ -2484,6 +2633,12 @@ Steelhead
 </td>
 <td style="text-align:right;">
 123224
+</td>
+<td style="text-align:right;">
+-0.809
+</td>
+<td style="text-align:right;">
+1
 </td>
 </tr>
 </tbody>
