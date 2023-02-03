@@ -314,4 +314,66 @@ results%>%
   kable_classic(full_width = F, html_font = "Cambria")
 ```
 
+# Effects of NPGO and a Pink Salmon even-odd year indicator variable on marine survival
+```{r effects of covariates on SAR, results = "as.is", echo = T, message = FALSE, warning = FALSE ,fig.show=T}
+
+NPGO_coef<-tibble(data.frame(extract(fit)$b1))%>%
+  pivot_longer(cols = everything())%>%
+  mutate(Var2=ifelse(stan_dat$pops>1,Var2,1))%>%
+  dplyr::rename(Population=Var2,NPGO_coef=value)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"))%>%
+  dplyr::select(NPGO_coef,Population)
+  
+p<-ggplot(NPGO_coef,aes(x=NPGO_coef,fill=Population),color=NA)+
+  geom_density()+
+  facet_wrap(~Population,ncol=2)+
+  ylab("Effect of NPGO on SAR")+
+  theme_bw()+
+  xlim(-1*max(NPGO_coef$NPGO_coef),max(NPGO_coef$NPGO_coef))+
+  geom_vline(xintercept = 0)
+print(p)
+
+
+results<-melt(apply(extract(fit)$b1,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Population=Var2)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"))%>%
+  pivot_wider(id_cols = c("Population"),names_from = Q,values_from = value)
+
+
+results%>%
+  kbl(caption = "Table 9. NPGO Coefficient Effect on SAR",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+PinkIndicator_coef<-tibble(data.frame(extract(fit)$b2))%>%
+  pivot_longer(cols = everything())%>%
+  mutate(Var2=ifelse(stan_dat$pops>1,Var2,1))%>%
+  dplyr::rename(Population=Var2,PinkIndicator_coef=value)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"))%>%
+  dplyr::select(PinkIndicator_coef,Population)
+  
+p<-ggplot(PinkIndicator_coef,aes(x=PinkIndicator_coef,fill=Population),color=NA)+
+  geom_density()+
+  facet_wrap(~Population,ncol=2)+
+  ylab("Effect of Pink Indicator variable on SAR")+
+  theme_bw()+
+  xlim(-1*max(PinkIndicator_coef$PinkIndicator_coef),max(PinkIndicator_coef$PinkIndicator_coef))+
+  geom_vline(xintercept = 0)
+print(p)
+
+
+results<-melt(apply(extract(fit)$b2,c(2:dim),function(x) quantile(x,prob=c(0.025,0.25,0.5,0.75,0.975))))%>%
+  as_tibble()%>%
+  mutate(Var3=ifelse(stan_dat$pops>1,Var3,1))%>%
+  dplyr::rename(Q=Var1,Population=Var2)%>%
+  mutate(Population=ifelse(Population==1,"Snake River DPS","Upper Columbia River DPS"))%>%
+  pivot_wider(id_cols = c("Population"),names_from = Q,values_from = value)
+
+
+results%>%
+  kbl(caption = "Table 10. Pink Salmon Indicator Variable Coefficient Effect on SAR",digits =3)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
 
